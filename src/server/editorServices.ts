@@ -1001,7 +1001,8 @@ enum ProjectAncestorLoadKind {
     FindCreateDelayLoad,
 }
 
-enum ConfiguredProjectKind {
+/** @internal */
+export enum ConfiguredProjectKind {
     Find,
     Create,
     Reload,
@@ -1784,7 +1785,7 @@ export class ProjectService {
     }
 
     /** @internal */
-    private onConfigFileChanged(canonicalConfigFilePath: NormalizedPath, eventKind: FileWatcherEventKind) {
+    private onConfigFileChanged(configFileName: NormalizedPath, canonicalConfigFilePath: NormalizedPath, eventKind: FileWatcherEventKind) {
         const configFileExistenceInfo = this.configFileExistenceInfoCache.get(canonicalConfigFilePath)!;
         if (eventKind === FileWatcherEventKind.Deleted) {
             // Update the cached status
@@ -1797,7 +1798,6 @@ export class ProjectService {
                 this.getConfiguredProjectByCanonicalConfigFilePath(canonicalConfigFilePath) :
                 undefined;
             if (project) this.removeProject(project);
-            // TODO:: sheetal configFileForOpenFiles:: update needed when deleting ancestor project
         }
         else {
             // Update the cached status
@@ -1805,7 +1805,7 @@ export class ProjectService {
         }
 
         // Update projects watching config
-        this.delayUpdateProjectsFromParsedConfigOnConfigFileChange(canonicalConfigFilePath, "Change in config file detected");
+        this.delayUpdateProjectsFromParsedConfigOnConfigFileChange(canonicalConfigFilePath, `Change in config file ${configFileName} detected`);
 
         // Reload the configured projects for the open files in the map as they are affected by this config file
         // If the configured project was deleted, we want to reload projects for all the open files including files
@@ -1814,11 +1814,11 @@ export class ProjectService {
         // we would need to schedule the project reload for only the root of inferred projects
         // Get open files to reload projects for
         const updatedProjects = new Set<ConfiguredProject>();
+        // Add the already scheduled project as updated
+        if (configFileExistenceInfo.config?.projects.has(canonicalConfigFilePath)) {
+            updatedProjects.add(this.findConfiguredProjectByProjectName(configFileName)!);
+        }
         configFileExistenceInfo.openFilesImpactedByConfigFile?.forEach((isRootOfInferredProject, path) => {
-            // Filter out the files that need to be ignored
-            // If file is added or modified, reload the project only for open files that are not root of inferred project
-            if (eventKind !== FileWatcherEventKind.Deleted && !isRootOfInferredProject) return;
-
             // Invalidate default config file name for open file
             this.configFileForOpenFiles.delete(path);
 
@@ -1833,11 +1833,10 @@ export class ProjectService {
                 const project = this.findConfiguredProjectByProjectName(configFileName) || this.createConfiguredProject(configFileName);
                 if (tryAddToSet(updatedProjects, project)) {
                     project.pendingUpdateLevel = ProgramUpdateLevel.Full;
-                    project.pendingUpdateReason = "Change in config file detected";
+                    project.pendingUpdateReason = `Change in config file ${configFileName} detected`;
                     this.delayUpdateProjectGraph(project);
                 }
-                // TODO:: After this update we need to ensure that we try and create Project for the open script info (through refs etc)
-                // TODO:: sheetal: ensureProjectForOpenFile needs to handle that?
+                (project.pendingOpenFileProjectUpdates ??= new Set()).add(path);
             }
         });
 
@@ -2087,7 +2086,7 @@ export class ProjectService {
         if (!configFileExistenceInfo.watcher || configFileExistenceInfo.watcher === noopConfigFileWatcher) {
             configFileExistenceInfo.watcher = this.watchFactory.watchFile(
                 configFileName,
-                (_fileName, eventKind) => this.onConfigFileChanged(canonicalConfigFilePath, eventKind),
+                (_fileName, eventKind) => this.onConfigFileChanged(configFileName, canonicalConfigFilePath, eventKind),
                 PollingInterval.High,
                 this.getWatchOptionsFromProjectWatchOptions(configFileExistenceInfo?.config?.parsedCommandLine?.watchOptions),
                 WatchType.ConfigFile,
@@ -2217,7 +2216,7 @@ export class ProjectService {
             configFileExistenceInfo.watcher ||= canWatchDirectoryOrFile(getPathComponents(getDirectoryPath(canonicalConfigFilePath) as Path)) ?
                 this.watchFactory.watchFile(
                     configFileName,
-                    (_filename, eventKind) => this.onConfigFileChanged(canonicalConfigFilePath, eventKind),
+                    (_filename, eventKind) => this.onConfigFileChanged(configFileName, canonicalConfigFilePath, eventKind),
                     PollingInterval.High,
                     this.hostConfiguration.watchOptions,
                     WatchType.ConfigFileForInferredRoot,
@@ -3828,9 +3827,11 @@ export class ProjectService {
         return info;
     }
 
-    private tryFindDefaultConfiguredProjectForOpenScriptInfo(info: ScriptInfo, kind: ConfiguredProjectKind.Find | ConfiguredProjectKind.Create): DefaultConfiguredProjectResult | undefined;
-    private tryFindDefaultConfiguredProjectForOpenScriptInfo(info: ScriptInfo, kind: ConfiguredProjectKind.Reload, reloadedProjects: Set<ConfiguredProject>): DefaultConfiguredProjectResult | undefined;
-    private tryFindDefaultConfiguredProjectForOpenScriptInfo(info: ScriptInfo, kind: ConfiguredProjectKind, reloadedProjects?: Set<ConfiguredProject>): string | DefaultConfiguredProjectResult | undefined {
+    /** @internal */
+    tryFindDefaultConfiguredProjectForOpenScriptInfo(info: ScriptInfo, kind: ConfiguredProjectKind.Find | ConfiguredProjectKind.Create): DefaultConfiguredProjectResult | undefined;
+    /** @internal */
+    tryFindDefaultConfiguredProjectForOpenScriptInfo(info: ScriptInfo, kind: ConfiguredProjectKind.Reload, reloadedProjects: Set<ConfiguredProject>): DefaultConfiguredProjectResult | undefined;
+    tryFindDefaultConfiguredProjectForOpenScriptInfo(info: ScriptInfo, kind: ConfiguredProjectKind, reloadedProjects?: Set<ConfiguredProject>): string | DefaultConfiguredProjectResult | undefined {
         const configFileName = this.getConfigFileNameForFile(info, kind === ConfiguredProjectKind.Find);
         if (!configFileName) return;
         let project = this.findConfiguredProjectByProjectName(configFileName);

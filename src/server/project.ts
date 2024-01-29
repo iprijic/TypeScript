@@ -135,6 +135,7 @@ import {
 import {
     ActionInvalidate,
     asNormalizedPath,
+    ConfiguredProjectKind,
     createModuleSpecifierCache,
     emptyArray,
     Errors,
@@ -2671,6 +2672,8 @@ export class ConfiguredProject extends Project {
     pendingUpdateLevel: ProgramUpdateLevel | undefined;
     /** @internal */
     pendingUpdateReason: string | undefined;
+    /** @internal */
+    pendingOpenFileProjectUpdates: Set<Path> | undefined;
 
     /** @internal */
     openFileWatchTriggered = new Map<string, ProgramUpdateLevel>();
@@ -2762,6 +2765,8 @@ export class ConfiguredProject extends Project {
         const isInitialLoad = this.isInitialLoadPending();
         this.isInitialLoadPending = returnFalse;
         const updateLevel = this.pendingUpdateLevel;
+        const pendingOpenFileProjectUpdates = this.pendingOpenFileProjectUpdates;
+        this.pendingOpenFileProjectUpdates = undefined;
         this.pendingUpdateLevel = ProgramUpdateLevel.Update;
         let result: boolean;
         switch (updateLevel) {
@@ -2781,6 +2786,13 @@ export class ConfiguredProject extends Project {
         this.compilerHost = undefined;
         this.projectService.sendProjectLoadingFinishEvent(this);
         this.projectService.sendProjectTelemetry(this);
+
+        pendingOpenFileProjectUpdates?.forEach(path => {
+            const info = this.projectService.getScriptInfoForPath(path);
+            if (info && this.projectService.openFiles.has(info.path)) {
+                this.projectService.tryFindDefaultConfiguredProjectForOpenScriptInfo(info, ConfiguredProjectKind.Create);
+            }
+        });
         return result;
     }
 

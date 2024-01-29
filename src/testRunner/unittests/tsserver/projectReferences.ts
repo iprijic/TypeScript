@@ -1690,7 +1690,7 @@ const b: B = new B();`,
         /* eslint-enable local/argument-trivia */
     });
 
-    it("when file is not in the first project found but is contained by project from solution", () => {
+    it("when file is not in the first project found but is contained by project from solution sheetal", () => {
         const appDemo: File = {
             path: "/home/src/projects/project/app/Component-demos.ts",
             content: dedent`
@@ -1768,11 +1768,6 @@ const b: B = new B();`,
             files: [appDemo],
             session,
         });
-        const info = session.getProjectService().getScriptInfo(appDemo.path)!;
-        session.logger.startGroup();
-        session.logger.info(`getDefaultProject for ${appDemo.path}: ${info.getDefaultProject().projectName}`);
-        session.logger.info(`findDefaultConfiguredProject for ${appDemo.path}: ${session.getProjectService().findDefaultConfiguredProject(info)?.projectName}`);
-        session.logger.endGroup();
         verifyProjectManagement(); // Should not remove projects for file
 
         closeFilesForSession([appDemo], session);
@@ -1800,26 +1795,30 @@ const b: B = new B();`,
 
         baselineTsserverLogs("projectReferences", "when file is not in the first project found but is contained by project from solution", session);
 
+        function printDefaultProject() {
+            const info = session.getProjectService().getScriptInfo(appDemo.path);
+            session.logger.startGroup();
+            session.logger.info(`getDefaultProject: ${session.getProjectService().tryGetDefaultProjectForFile(appDemo.path as ts.server.NormalizedPath)?.projectName}`);
+            session.logger.info(`findDefaultConfiguredProject: ${info && session.getProjectService().findDefaultConfiguredProject(info)?.projectName}`);
+            session.logger.endGroup();
+        }
+
         function verifyProjectManagement() {
+            printDefaultProject();
             openFilesForSession([randomTs], session); // Verify Project management
             closeFilesForSession([randomTs], session);
+            printDefaultProject();
         }
 
         function verifyAppConfigNotComposite(projManagementBeforeRevert: boolean) {
             // Not composite
-            host.writeFile(appConfig.path, appConfig.content.replace(`"composite": true,`, ""));
-            host.runQueuedTimeoutCallbacks();
-            if (projManagementBeforeRevert) verifyProjectManagement();
-            // Revert
-            host.writeFile(appConfig.path, appConfig.content);
-            host.runQueuedTimeoutCallbacks();
-            if (!projManagementBeforeRevert) verifyProjectManagement();
+            verifyConfigChange(appConfig, appConfig.content.replace(`"composite": true,`, ""), projManagementBeforeRevert);
         }
 
         function verifySolutionConfigNotComposite(projManagementBeforeRevert: boolean) {
             // Not referencing demos
-            host.writeFile(
-                solutionConfig.path,
+            verifyConfigChange(
+                solutionConfig,
                 jsonToReadableText({
                     compilerOptions: {
                         outDir: "./dist/",
@@ -1828,35 +1827,31 @@ const b: B = new B();`,
                         { path: "./app/tsconfig.json" },
                     ],
                 }),
+                projManagementBeforeRevert,
             );
-            host.runQueuedTimeoutCallbacks();
-            if (projManagementBeforeRevert) verifyProjectManagement();
-            // Revert
-            host.writeFile(solutionConfig.path, solutionConfig.content);
-            host.runQueuedTimeoutCallbacks();
-            if (!projManagementBeforeRevert) verifyProjectManagement();
         }
 
         function verifySolutionConfigDelete(projManagementBeforeRevert: boolean) {
-            // Not referencing demos
-            host.deleteFile(solutionConfig.path);
-            host.runQueuedTimeoutCallbacks();
-            if (projManagementBeforeRevert) verifyProjectManagement();
-            // Revert
-            host.writeFile(solutionConfig.path, solutionConfig.content);
-            host.runQueuedTimeoutCallbacks();
-            if (!projManagementBeforeRevert) verifyProjectManagement();
+            // Delete solution file
+            verifyConfigChange(solutionConfig, /*change*/ undefined, projManagementBeforeRevert);
         }
 
         function verfiyDemoConfigChange(projManagementBeforeRevert: boolean) {
             // Make some errors in demo::
-            host.writeFile(demoConfig.path, demoConfig.content.replace(`"../app/**/*-demos.*"`, ""));
+            verifyConfigChange(demoConfig, demoConfig.content.replace(`"../app/**/*-demos.*"`, ""), projManagementBeforeRevert);
+        }
+
+        function verifyConfigChange(config: File, change: string | undefined, projManagementBeforeRevert: boolean) {
+            if (change !== undefined) host.writeFile(config.path, change);
+            else host.deleteFile(config.path);
             host.runQueuedTimeoutCallbacks();
             if (projManagementBeforeRevert) verifyProjectManagement();
+            else printDefaultProject();
             // Revert
-            host.writeFile(demoConfig.path, demoConfig.content);
+            host.writeFile(config.path, config.content);
             host.runQueuedTimeoutCallbacks();
             if (!projManagementBeforeRevert) verifyProjectManagement();
+            else printDefaultProject();
         }
     });
 });
