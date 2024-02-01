@@ -160,6 +160,7 @@ import {
     isDynamicFileName,
     isInferredProject,
     isInferredProjectName,
+    isProjectDeferredClose,
     ITypingsInstaller,
     Logger,
     LogLevel,
@@ -1339,6 +1340,7 @@ export class ProjectService {
     }
 
     private delayUpdateProjectGraph(project: Project) {
+        if (isProjectDeferredClose(project)) return;
         project.markAsDirty();
         if (isBackgroundProject(project)) return;
         const projectName = project.getProjectName();
@@ -1771,21 +1773,24 @@ export class ProjectService {
     /** @internal */
     private onConfigFileChanged(canonicalConfigFilePath: NormalizedPath, eventKind: FileWatcherEventKind) {
         const configFileExistenceInfo = this.configFileExistenceInfoCache.get(canonicalConfigFilePath)!;
+        const project = this.getConfiguredProjectByCanonicalConfigFilePath(canonicalConfigFilePath);
+        const wasDefferedClose = project?.deferredClose;
         if (eventKind === FileWatcherEventKind.Deleted) {
             // Update the cached status
             // We arent updating or removing the cached config file presence info as that will be taken care of by
             // releaseParsedConfig when the project is closed or doesnt need this config any more (depending on tracking open files)
             configFileExistenceInfo.exists = false;
 
-            // Remove the configured project for this config file
-            const project = configFileExistenceInfo.config?.projects.has(canonicalConfigFilePath) ?
-                this.getConfiguredProjectByCanonicalConfigFilePath(canonicalConfigFilePath) :
-                undefined;
-            if (project) this.removeProject(project);
+            // Deferred remove the configured project for this config file
+            if (project) project.deferredClose = true;
         }
         else {
             // Update the cached status
             configFileExistenceInfo.exists = true;
+            if (wasDefferedClose) {
+                project.deferredClose = undefined;
+                project.markAsDirty();
+            }
         }
 
         // Update projects watching config
@@ -1799,7 +1804,7 @@ export class ProjectService {
         // Get open files to reload projects for
         this.delayReloadConfiguredProjectsForFile(
             configFileExistenceInfo,
-            eventKind !== FileWatcherEventKind.Deleted ?
+            !wasDefferedClose && eventKind !== FileWatcherEventKind.Deleted ?
                 identity : // Reload open files if they are root of inferred project
                 returnTrue, // Reload all the open files impacted by config file
             "Change in config file detected",
@@ -1814,13 +1819,13 @@ export class ProjectService {
      * shouldReloadProjectFor provides a way to filter out files to reload configured project for
      */
     private delayReloadConfiguredProjectsForFile(
-        configFileExistenceInfo: ConfigFileExistenceInfo,
+        configFileExistenceInfo: ConfigFileExistenceInfo | undefined,
         shouldReloadProjectFor: (infoIsRootOfInferredProject: boolean) => boolean,
         reason: string,
     ) {
         const updatedProjects = new Set<ConfiguredProject>();
         // try to reload config file for all open files
-        configFileExistenceInfo.openFilesImpactedByConfigFile?.forEach((infoIsRootOfInferredProject, path) => {
+        configFileExistenceInfo?.openFilesImpactedByConfigFile?.forEach((infoIsRootOfInferredProject, path) => {
             // Invalidate default config file name for open file
             this.configFileForOpenFiles.delete(path);
             // Filter out the files that need to be ignored
@@ -2367,7 +2372,8 @@ export class ProjectService {
     findConfiguredProjectByProjectName(configFileName: NormalizedPath): ConfiguredProject | undefined {
         // make sure that casing of config file name is consistent
         const canonicalConfigFilePath = asNormalizedPath(this.toCanonicalFileName(configFileName));
-        return this.getConfiguredProjectByCanonicalConfigFilePath(canonicalConfigFilePath);
+        const result = this.getConfiguredProjectByCanonicalConfigFilePath(canonicalConfigFilePath);
+        return !result?.deferredClose ? result : undefined;
     }
 
     private getConfiguredProjectByCanonicalConfigFilePath(canonicalConfigFilePath: string): ConfiguredProject | undefined {
@@ -2517,6 +2523,7 @@ export class ProjectService {
             this.documentRegistry,
             configFileExistenceInfo.config.cachedDirectoryStructureHost,
         );
+        Debug.assert(!this.configuredProjects.has(canonicalConfigFilePath));
         this.configuredProjects.set(canonicalConfigFilePath, project);
         this.createConfigFileWatcherForParsedConfig(configFileName, canonicalConfigFilePath, project);
         return project;
@@ -3467,6 +3474,7 @@ export class ProjectService {
                     this.externalProjectToConfiguredProjectMap.forEach(projects =>
                         projects.forEach(project => {
                             if (
+                                !project.deferredClose &&
                                 !project.isClosed() &&
                                 project.hasExternalProjectRef() &&
                                 project.pendingUpdateLevel === ProgramUpdateLevel.Full &&
@@ -3755,10 +3763,7 @@ export class ProjectService {
         return originalLocation;
 
         function addOriginalConfiguredProject(originalProject: ConfiguredProject) {
-            if (!project.originalConfiguredProjects) {
-                project.originalConfiguredProjects = new Set();
-            }
-            project.originalConfiguredProjects.add(originalProject.canonicalConfigFilePath);
+            (project.originalConfiguredProjects ??= new Set()).add(originalProject.canonicalConfigFilePath);
         }
     }
 
@@ -3990,7 +3995,7 @@ export class ProjectService {
     private removeOrphanConfiguredProjects(toRetainConfiguredProjects: readonly ConfiguredProject[] | ConfiguredProject | undefined) {
         const toRemoveConfiguredProjects = new Map(this.configuredProjects);
         const markOriginalProjectsAsUsed = (project: Project) => {
-            if (!project.isOrphan() && project.originalConfiguredProjects) {
+            if (project.originalConfiguredProjects && (isConfiguredProject(project) || !project.isOrphan())) {
                 project.originalConfiguredProjects.forEach(
                     (_value, configuredProjectPath) => {
                         const project = this.getConfiguredProjectByCanonicalConfigFilePath(configuredProjectPath);
@@ -4012,16 +4017,14 @@ export class ProjectService {
         this.inferredProjects.forEach(markOriginalProjectsAsUsed);
         this.externalProjects.forEach(markOriginalProjectsAsUsed);
         this.configuredProjects.forEach(project => {
+            if (!toRemoveConfiguredProjects.has(project.canonicalConfigFilePath)) return;
             // If project has open ref (there are more than zero references from external project/open file), keep it alive as well as any project it references
             if (project.hasOpenRef()) {
                 retainConfiguredProject(project);
             }
-            else if (toRemoveConfiguredProjects.has(project.canonicalConfigFilePath)) {
-                // If the configured project for project reference has more than zero references, keep it alive
-                forEachReferencedProject(
-                    project,
-                    ref => isRetained(ref) && retainConfiguredProject(project),
-                );
+            // If the configured project for project reference has more than zero references, keep it alive
+            else if (forEachReferencedProject(project, ref => isRetained(ref))) {
+                retainConfiguredProject(project);
             }
         });
 
@@ -4029,7 +4032,7 @@ export class ProjectService {
         toRemoveConfiguredProjects.forEach(project => this.removeProject(project));
 
         function isRetained(project: ConfiguredProject) {
-            return project.hasOpenRef() || !toRemoveConfiguredProjects.has(project.canonicalConfigFilePath);
+            return !toRemoveConfiguredProjects.has(project.canonicalConfigFilePath) || project.hasOpenRef();
         }
 
         function retainConfiguredProject(project: ConfiguredProject) {
@@ -4142,7 +4145,7 @@ export class ProjectService {
     synchronizeProjectList(knownProjects: protocol.ProjectVersionInfo[], includeProjectReferenceRedirectInfo?: boolean): ProjectFilesWithTSDiagnostics[] {
         const files: ProjectFilesWithTSDiagnostics[] = [];
         this.collectChanges(knownProjects, this.externalProjects, includeProjectReferenceRedirectInfo, files);
-        this.collectChanges(knownProjects, this.configuredProjects.values(), includeProjectReferenceRedirectInfo, files);
+        this.collectChanges(knownProjects, mapDefinedIterator(this.configuredProjects.values(), p => p.deferredClose ? undefined : p), includeProjectReferenceRedirectInfo, files);
         this.collectChanges(knownProjects, this.inferredProjects, includeProjectReferenceRedirectInfo, files);
         return files;
     }
@@ -4610,28 +4613,28 @@ export class ProjectService {
 
         // Process all pending plugins, partitioned by project. This way a project with few plugins doesn't need to wait
         // on a project with many plugins.
-        await Promise.all(map(pendingPlugins, ([project, promises]) => this.enableRequestedPluginsForProjectAsync(project, promises)));
+        let sendProjectsUpdatedInBackgroundEvent = false;
+        await Promise.all(map(pendingPlugins, async ([project, promises]) => {
+            // Await all pending plugin imports. This ensures all requested plugin modules are fully loaded
+            // prior to patching the language service, and that any promise rejections are observed.
+            const results = await Promise.all(promises);
+            if (project.isClosed() || isProjectDeferredClose(project)) {
+                this.logger.info(`Cancelling plugin enabling for ${project.getProjectName()} as it is ${project.isClosed() ? "closed" : "deferred close"}`);
+                // project is not alive, so don't enable plugins.
+                return;
+            }
+            sendProjectsUpdatedInBackgroundEvent = true;
+            for (const result of results) {
+                this.endEnablePlugin(project, result);
+            }
+
+            // Plugins may have modified external files, so mark the project as dirty.
+            this.delayUpdateProjectGraph(project);
+        }));
 
         // Clear the pending operation and notify the client that projects have been updated.
         this.currentPluginEnablementPromise = undefined;
-        this.sendProjectsUpdatedInBackgroundEvent();
-    }
-
-    private async enableRequestedPluginsForProjectAsync(project: Project, promises: Promise<BeginEnablePluginResult>[]) {
-        // Await all pending plugin imports. This ensures all requested plugin modules are fully loaded
-        // prior to patching the language service, and that any promise rejections are observed.
-        const results = await Promise.all(promises);
-        if (project.isClosed()) {
-            // project is not alive, so don't enable plugins.
-            return;
-        }
-
-        for (const result of results) {
-            this.endEnablePlugin(project, result);
-        }
-
-        // Plugins may have modified external files, so mark the project as dirty.
-        this.delayUpdateProjectGraph(project);
+        if (sendProjectsUpdatedInBackgroundEvent) this.sendProjectsUpdatedInBackgroundEvent();
     }
 
     configurePlugin(args: protocol.ConfigurePluginRequestArguments) {
