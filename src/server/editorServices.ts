@@ -1585,9 +1585,9 @@ export class ProjectService {
             this.handleDeletedFile(info, /*deferredDelete*/ true);
         }
         else {
-            if (info.deferredDelete) info.deferredDelete = undefined;
             // file has been changed which might affect the set of referenced files in projects that include
             // this file and set of inferred projects
+            info.deferredDelete = undefined;
             info.delayReloadNonMixedContentFile();
             this.delayUpdateProjectGraphs(info.containingProjects, /*clearSourceMapperCache*/ false);
             this.handleSourceMapProjects(info);
@@ -1627,12 +1627,17 @@ export class ProjectService {
 
     private handleDeletedFile(info: ScriptInfo, deferredDelete: boolean) {
         Debug.assert(!info.isScriptOpen());
+        const containingProjects = deferredDelete ? info.containingProjects.slice() : undefined;
         this.delayUpdateProjectGraphs(info.containingProjects, /*clearSourceMapperCache*/ false);
         this.handleSourceMapProjects(info);
         info.detachAllProjects();
         if (deferredDelete) {
             info.delayReloadNonMixedContentFile();
-            info.deferredDelete = true; // sheetal - should we keep projects
+            info.deferredDelete = true;
+            containingProjects!.forEach(project => {
+                (project.deferredDeletedInfos ??= new Set()).add(info);
+                info.containingProjects.push(project);
+            });
         }
         else {
             this.deleteScriptInfo(info);
@@ -2037,6 +2042,7 @@ export class ProjectService {
 
     private deleteScriptInfo(info: ScriptInfo) {
         Debug.assert(!info.isScriptOpen());
+        info.containingProjects.forEach(project => !project.deferredDeletedInfos?.delete(info));
         this.filenameToScriptInfo.delete(info.path);
         this.filenameToScriptInfoVersion.set(info.path, info.textStorage.version);
         this.stopWatchingScriptInfo(info);

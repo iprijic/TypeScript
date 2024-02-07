@@ -186,6 +186,8 @@ new C();`,
                 });
 
                 it("when project recompiles after deleting generated folders", () => {
+                    // This one shows issue with symlink folder update not received by tsserver by watching directory
+                    // sheetal: TODO:
                     const host = createServerHost([...filesWithSources, nodeModulesRecorgnizersText, recongnizerTextDistTypingFile]);
                     const session = createSessionAndOpenFile(host);
 
