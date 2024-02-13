@@ -1577,6 +1577,7 @@ export class Session<TMessage = string> implements EventSender {
                         fileNameToSearch,
                         noDtsProject.currentDirectory,
                         noDtsProject.directoryStructureHost,
+                        /*deferredDeleteOk*/ false,
                     );
                     if (!info) continue;
                     if (!noDtsProject.containsScriptInfo(info)) {
