@@ -378,7 +378,7 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
         this.environmentVariables = environmentVariables;
         currentDirectory = currentDirectory || "/";
         this.getCanonicalFileName = createGetCanonicalFileName(!!useCaseSensitiveFileNames);
-        this.watchUtils = createWatchUtils("PolledWatches", "FsWatches", s => this.getCanonicalFileName(s));
+        this.watchUtils = createWatchUtils("PolledWatches", "FsWatches", s => this.getCanonicalFileName(s), this);
         this.toPath = s => toPath(s, currentDirectory, this.getCanonicalFileName);
         this.executingFilePath = this.getHostSpecificPath(executingFilePath || getExecutingFilePathFromLibFile());
         this.currentDirectory = this.getHostSpecificPath(currentDirectory);
@@ -634,7 +634,7 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
         const inodeWatching = this.inodeWatching;
         if (options?.skipInodeCheckOnCreate) this.inodeWatching = false;
         this.invokeFileAndFsWatches(fileOrDirectory.fullPath, FileWatcherEventKind.Created, fileOrDirectory.modifiedTime, options?.useTildeAsSuffixInRenameEventFileName);
-        this.invokeFileAndFsWatches(folder.fullPath, FileWatcherEventKind.Changed, fileOrDirectory.modifiedTime, options?.useTildeAsSuffixInRenameEventFileName);
+        this.invokeFileAndFsWatches(folder.fullPath, FileWatcherEventKind.Changed, folder.modifiedTime, options?.useTildeAsSuffixInRenameEventFileName);
         this.inodeWatching = inodeWatching;
     }
 
@@ -658,14 +658,14 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
 
     deleteFile(filePath: string) {
         const path = this.toFullPath(filePath);
-        const currentEntry = this.fs.get(path) as FsFile;
+        const currentEntry = this.fs.get(path);
         Debug.assert(isFsFile(currentEntry));
         this.removeFileOrFolder(currentEntry);
     }
 
     deleteFolder(folderPath: string, recursive?: boolean) {
         const path = this.toFullPath(folderPath);
-        const currentEntry = this.fs.get(path) as FsFolder;
+        const currentEntry = this.fs.get(path);
         Debug.assert(isFsFolder(currentEntry));
         if (recursive && currentEntry.entries.length) {
             const subEntries = currentEntry.entries.slice();
@@ -688,7 +688,7 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
         );
     }
 
-    private fsWatchWorker(
+    fsWatchWorker(
         fileOrDirectory: string,
         recursive: boolean,
         cb: FsWatchCallback,
@@ -710,7 +710,7 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
     }
 
     invokeFileWatcher(fileFullPath: string, eventKind: FileWatcherEventKind, modifiedTime: Date | undefined) {
-        this.watchUtils.pollingWatches.forEach(fileFullPath, ({ cb }) => cb(fileFullPath, eventKind, modifiedTime));
+        this.watchUtils.pollingWatches.forEach(fileFullPath, ({ cb }, fullPath) => cb(fullPath, eventKind, modifiedTime));
     }
 
     private fsWatchCallback(watches: Watches<TestFsWatcher>, fullPath: string, eventName: "rename" | "change", modifiedTime: Date | undefined, entryFullPath: string | undefined, useTildeSuffix: boolean | undefined) {
@@ -822,6 +822,10 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
         return this.getRealFsEntry(isFsFolder, path, fsEntry);
     }
 
+    private getRealFileOrFolder(s: string): FsFile | FsFolder | undefined {
+        return this.getRealFsEntry((entry): entry is FsFile | FsFolder => !!entry && !isFsSymLink(entry), this.toFullPath(s));
+    }
+
     fileSystemEntryExists(s: string, entryKind: FileSystemEntryKind) {
         return entryKind === FileSystemEntryKind.File ? this.fileExists(s) : this.directoryExists(s);
     }
@@ -832,14 +836,11 @@ export class TestServerHost implements server.ServerHost, FormatDiagnosticsHost,
     }
 
     getModifiedTime(s: string) {
-        const path = this.toFullPath(s);
-        const fsEntry = this.fs.get(path);
-        return (fsEntry && fsEntry.modifiedTime)!; // TODO: GH#18217
+        return this.getRealFileOrFolder(s)?.modifiedTime;
     }
 
     setModifiedTime(s: string, date: Date) {
-        const path = this.toFullPath(s);
-        const fsEntry = this.fs.get(path);
+        const fsEntry = this.getRealFileOrFolder(s);
         if (fsEntry) {
             fsEntry.modifiedTime = date;
             this.invokeFileAndFsWatches(fsEntry.fullPath, FileWatcherEventKind.Changed, fsEntry.modifiedTime);

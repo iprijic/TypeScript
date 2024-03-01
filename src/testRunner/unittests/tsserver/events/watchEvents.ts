@@ -42,6 +42,7 @@ describe("unittests:: tsserver:: events:: watchEvents", () => {
                 "Custom WatchedFiles",
                 "Custom WatchedDirectories",
                 host.getCanonicalFileName,
+                host,
             ),
             watchFile,
             watchDirectory,
@@ -115,7 +116,7 @@ describe("unittests:: tsserver:: events:: watchEvents", () => {
         session.logger.log("Custom watch");
         (session.logger.host as TestServerHostWithCustomWatch).factoryData.watchUtils.pollingWatches.forEach(
             path,
-            data =>
+            (data, path) =>
                 session.executeCommandSeq<ts.server.protocol.WatchChangeRequest>({
                     command: ts.server.protocol.CommandTypes.WatchChange,
                     arguments: { id: data.id, path, eventType: "update" },
