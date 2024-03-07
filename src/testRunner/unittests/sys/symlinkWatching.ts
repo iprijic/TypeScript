@@ -73,7 +73,7 @@ describe("unittests:: sys:: symlinkWatching::", () => {
         link: string,
         fsWatch: (dir: string, cb: ts.FsWatchCallback, sys: System) => ts.FileWatcher,
     ) {
-        it(`watchDirectory using fsEvents sheetal`, async () => {
+        it(`watchDirectory using fsEvents`, async () => {
             const expectedEvent = ["rename", "change", "rename", "change"];
             const expectedFileName = ["file1.ts", "file1.ts", "file2.ts", "file2.ts"];
             const fileResult = watchDirectory(dir);
