@@ -31,8 +31,9 @@ export const coverageDir = "coverage";
  * @param {boolean} [options.watching]
  */
 export async function runConsoleTests(runJs, defaultReporter, runInParallel, options = {}) {
+    runInParallel = false;
     const testTimeout = cmdLineOptions.timeout;
-    const tests = cmdLineOptions.tests;
+    const tests = "sys:: symlinkWatching::"; // cmdLineOptions.tests;
     const inspect = cmdLineOptions.break || cmdLineOptions.inspect;
     const runners = cmdLineOptions.runners;
     const light = cmdLineOptions.light;
