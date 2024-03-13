@@ -72,6 +72,7 @@ describe("unittests:: sys:: symlinkWatching::", () => {
         dir: string,
         link: string,
         fsWatch: (dir: string, cb: ts.FsWatchCallback, sys: System) => ts.FileWatcher,
+        isMacOs: boolean,
     ) {
         it(`watchDirectory using fsEvents`, async () => {
             const expectedEvent = ["rename", "change", "rename", "change"];
@@ -83,16 +84,21 @@ describe("unittests:: sys:: symlinkWatching::", () => {
             // Should invoke on file as well as link, rename and change
             await fileResult.deferred[0].promise;
             await linkResult.deferred[0].promise;
-            await fileResult.deferred[1].promise;
-            await linkResult.deferred[1].promise;
+            if (!isMacOs) {
+                // MacOs does not get change events when new file is created
+                await fileResult.deferred[1].promise;
+                await linkResult.deferred[1].promise;
+            }
 
             delayedOp(() => sys.writeFile(`${link}/file2.ts`, "export const x = 100;"));
             // // Should invoke on file as well as link, rename and change
             await fileResult.deferred[2].promise;
             await linkResult.deferred[2].promise;
-            await fileResult.deferred[3].promise;
-            await linkResult.deferred[3].promise;
-
+            if (!isMacOs) {
+                // MacOs does not get change events when new file is created
+                await fileResult.deferred[3].promise;
+                await linkResult.deferred[3].promise;
+            }
             fileResult.watcher.close();
             linkResult.watcher.close();
 
@@ -107,6 +113,7 @@ describe("unittests:: sys:: symlinkWatching::", () => {
                             assert.equal(event, expectedEvent[indexForDefer]);
                             assert(!fileName || fileName === expectedFileName[indexForDefer]);
                             deferred[indexForDefer++].resolve();
+                            if (isMacOs) indexForDefer++; // MacOs does not get change events when new file is created so skip that one
                         },
                         sys,
                     ),
@@ -177,6 +184,7 @@ describe("unittests:: sys:: symlinkWatching::", () => {
             `${root}/dirfsevents`,
             `${root}/linkeddirfsevents`,
             (dir, cb) => fs.watch(dir, { persistent: true }, cb),
+            process.platform === "darwin",
         );
     });
 
@@ -217,6 +225,16 @@ describe("unittests:: sys:: symlinkWatching::", () => {
             `${root}/folder`,
             `${root}/linked`,
             (dir, cb, sys) => sys.fsWatchWorker(dir, /*recursive*/ false, cb),
+            /*isMacOs*/ false,
         );
+
+        // TODO (sheetal) add test for mac os behaviour so we have it on host to verify
+        // verifyWatchDirectoryUsingFsEvents(
+        //     getSys(),
+        //     `${root}/folder`,
+        //     `${root}/linked`,
+        //     (dir, cb, sys) => sys.fsWatchWorker(dir, /*recursive*/ false, cb),
+        //     /*isMacOs*/ true
+        // );
     });
 });
