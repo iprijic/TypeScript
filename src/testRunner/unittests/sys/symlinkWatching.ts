@@ -123,7 +123,7 @@ describe("unittests:: sys:: symlinkWatching::", () => {
                 verifyEventAndFileNames(`${opType}:: link`, linkResult.actual, expectedLinkResult);
             }
             deferred.resolve();
-        }, 4000);
+        }, 2000);
         return deferred.promise;
     }
 
@@ -289,28 +289,20 @@ describe("unittests:: sys:: symlinkWatching::", () => {
                 initializeWatchDirectoryResult(dirResult, linkResult);
                 switch (opType) {
                     case "fileCreate":
-                        sys.writeFile(`${dir}/file1.ts`, "export const x = 100;");
-                        break;
                     case "linkFileCreate":
-                        sys.writeFile(`${link}/file2.ts`, "export const x = 100;");
+                        sys.writeFile(fileName(opType), "export const x = 100;");
                         break;
                     case "fileChange":
-                        sys.writeFile(`${dir}/file1.ts`, "export const x2 = 100;");
-                        break;
                     case "linkFileChange":
-                        sys.writeFile(`${link}/file2.ts`, "export const x2 = 100;");
+                        sys.writeFile(fileName(opType), "export const x2 = 100;");
                         break;
                     case "fileModifiedTimeChange":
-                        sys.setModifiedTime!(`${dir}/file1.ts`, new Date());
-                        break;
                     case "linkModifiedTimeChange":
-                        sys.setModifiedTime!(`${link}/file2.ts`, new Date());
+                        sys.setModifiedTime!(fileName(opType), new Date());
                         break;
                     case "fileDelete":
-                        sys.deleteFile!(`${dir}/file1.ts`);
-                        break;
                     case "linkFileDelete":
-                        sys.deleteFile!(`${link}/file2.ts`);
+                        sys.deleteFile!(fileName(opType));
                         break;
                     default:
                         ts.Debug.assertNever(opType);
@@ -323,6 +315,183 @@ describe("unittests:: sys:: symlinkWatching::", () => {
                     linkResult,
                     tableOfEvents[opType],
                 );
+            }
+
+            function fileName(opType: string) {
+                return ts.startsWith(opType, "file") ?
+                    `${dir}/file1.ts` :
+                    `${link}/file2.ts`;
+            }
+        });
+    }
+
+    interface RecursiveFsEventsForWatchDirectory extends FsEventsForWatchDirectory {
+        // For recursive the first time events are most of the time are not predictable, so just create random file for that reason
+        init?: ExpectedEventAndFileName[];
+        linkSubFileCreate: readonly ExpectedEventAndFileName[];
+        parallelFileCreate: readonly ExpectedEventAndFileName[];
+        parallelLinkFileCreate: readonly ExpectedEventAndFileName[];
+        linkSubFileChange: readonly ExpectedEventAndFileName[];
+        parallelFileChange: readonly ExpectedEventAndFileName[];
+        parallelLinkFileChange: readonly ExpectedEventAndFileName[];
+        linkSubModifiedTimeChange: readonly ExpectedEventAndFileName[];
+        parallelFileModifiedTimeChange: readonly ExpectedEventAndFileName[];
+        parallelLinkModifiedTimeChange: readonly ExpectedEventAndFileName[];
+        linkedSubFileDelete: readonly ExpectedEventAndFileName[];
+        parallelFileDelete: readonly ExpectedEventAndFileName[];
+        parallelLinkFileDelete: readonly ExpectedEventAndFileName[];
+    }
+    function verifyRecursiveWatchDirectoryUsingFsEvents<System extends ts.System>(
+        sys: System,
+        fsWatch: FsWatch<System>,
+        dir: string,
+        link: string,
+        isMacOs: boolean,
+    ) {
+        it(`recursive watchDirectory using fsEvents`, async () => {
+            console.log("recrusive watchDirectory using fsEvents");
+
+            const eventsForDir: Partial<RecursiveFsEventsForWatchDirectory> = isMacOs ?
+                {
+                    fileCreate: [
+                        { event: "rename", fileName: "sub/folder/file1.ts" },
+                    ],
+                    linkFileCreate: [
+                        { event: "rename", fileName: "sub/folder/file2.ts" },
+                    ],
+                } :
+                {
+                    fileCreate: [
+                        { event: "rename", fileName: "sub/folder/file1.ts" },
+                        { event: "change", fileName: "sub/folder/file1.ts" },
+                        { event: "change", fileName: "sub/folder" },
+                    ],
+                    linkFileCreate: [
+                        { event: "rename", fileName: "sub/folder/file2.ts" },
+                        { event: "change", fileName: "sub/folder/file2.ts" },
+                        { event: "change", fileName: "sub/folder" },
+                    ],
+                };
+
+            const eventsForLink: Partial<RecursiveFsEventsForWatchDirectory> = isMacOs ?
+                {
+                    fileCreate: [
+                        { event: "rename", fileName: "sub/folder/file1.ts" },
+                    ],
+                    linkFileCreate: [
+                        { event: "rename", fileName: "sub/folder/file2.ts" },
+                    ],
+                } :
+                {
+                    fileCreate: [
+                        { event: "rename", fileName: "sub/folder/file1.ts" },
+                        { event: "change", fileName: "sub/folder/file1.ts" },
+                        { event: "change", fileName: "sub/folder" },
+                    ],
+                    linkFileCreate: [
+                        { event: "rename", fileName: "sub/folder/file2.ts" },
+                        { event: "change", fileName: "sub/folder/file2.ts" },
+                        { event: "change", fileName: "sub/folder" },
+                    ],
+                };
+
+            const dirResult = recursiveWatchDirectory(dir);
+            const linkResult = recursiveWatchDirectory(link);
+
+            await operation("init");
+            await operation("fileCreate");
+            await operation("linkFileCreate");
+            await operation("linkSubFileCreate");
+            await operation("parallelFileCreate");
+            await operation("parallelLinkFileCreate");
+
+            await operation("fileChange");
+            await operation("linkFileChange");
+            await operation("linkSubFileChange");
+            await operation("parallelFileChange");
+            await operation("parallelLinkFileChange");
+
+            await operation("fileModifiedTimeChange");
+            await operation("linkModifiedTimeChange");
+            await operation("linkSubModifiedTimeChange");
+            await operation("parallelFileModifiedTimeChange");
+            await operation("parallelLinkModifiedTimeChange");
+
+            await operation("fileDelete");
+            await operation("linkFileDelete");
+            await operation("linkedSubFileDelete");
+            await operation("parallelFileDelete");
+            await operation("parallelLinkFileDelete");
+
+            dirResult.watcher.close();
+            linkResult.watcher.close();
+
+            function recursiveWatchDirectory(dir: string) {
+                return watchDirectory(sys, fsWatch, dir, /*recursive*/ true);
+            }
+
+            async function operation(opType: keyof RecursiveFsEventsForWatchDirectory) {
+                console.log("");
+                console.log(opType);
+                initializeWatchDirectoryResult(dirResult, linkResult);
+                switch (opType) {
+                    case "init":
+                        sys.writeFile(`${dir}/sub/folder/init.ts`, "export const x = 100;");
+                        sys.writeFile(`${dir}2/sub/folder/init.ts`, "export const x = 100;");
+                        break;
+                    case "fileCreate":
+                    case "linkFileCreate":
+                    case "linkSubFileCreate":
+                    case "parallelFileCreate":
+                    case "parallelLinkFileCreate":
+                        sys.writeFile(fileName(opType), "export const x = 100;");
+                        break;
+                    case "fileChange":
+                    case "linkFileChange":
+                    case "linkSubFileChange":
+                    case "parallelFileChange":
+                    case "parallelLinkFileChange":
+                        sys.writeFile(fileName(opType), "export const x2 = 100;");
+                        break;
+                    case "fileModifiedTimeChange":
+                    case "linkModifiedTimeChange":
+                    case "linkSubModifiedTimeChange":
+                    case "parallelFileModifiedTimeChange":
+                    case "parallelLinkModifiedTimeChange":
+                        sys.setModifiedTime!(fileName(opType), new Date());
+                        break;
+                    case "fileDelete":
+                    case "linkFileDelete":
+                    case "linkedSubFileDelete":
+                    case "parallelFileDelete":
+                    case "parallelLinkFileDelete":
+                        sys.deleteFile!(fileName(opType));
+                        break;
+                    default:
+                        ts.Debug.assertNever(opType);
+                }
+
+                await verfiyWatchDirectoryResult(
+                    opType,
+                    dirResult,
+                    eventsForDir[opType]!,
+                    linkResult,
+                    eventsForLink[opType]!,
+                    // opType === "init",
+                    /*skipAsserts*/ true,
+                );
+            }
+
+            function fileName(opType: string) {
+                return ts.startsWith(opType, "file") ?
+                    `${dir}/sub/folder/file1.ts` :
+                    ts.startsWith(opType, "linkSub") ?
+                    `${dir}/linkedsub/folder/file3.ts` :
+                    ts.startsWith(opType, "link") ?
+                    `${link}/sub/folder/file2.ts` :
+                    ts.startsWith(opType, "parallelFile") ?
+                    `${dir}2/sub/folder/file4.ts` :
+                    `${dir}/linkedsub2/sub/folder/file5.ts`;
             }
         });
     }
@@ -345,6 +514,11 @@ describe("unittests:: sys:: symlinkWatching::", () => {
             withSwallowException(() => fs.symlinkSync(`${root}/dirpolling`, `${root}/linkeddirpolling`, "junction"));
             ts.sys.writeFile(`${root}/dirfsevents/file.ts`, "export const x = 10;");
             withSwallowException(() => fs.symlinkSync(`${root}/dirfsevents`, `${root}/linkeddirfsevents`, "junction"));
+            ts.sys.writeFile(`${root}/recursivefsevents/sub/folder/file.ts`, "export const x = 10;");
+            ts.sys.writeFile(`${root}/recursivefsevents2/sub/folder/file.ts`, "export const x = 10;");
+            withSwallowException(() => fs.symlinkSync(`${root}/recursivefsevents`, `${root}/recursivelinkedfsevents`, "junction"));
+            withSwallowException(() => fs.symlinkSync(`${root}/recursivefsevents/sub`, `${root}/recursivefsevents/linkedsub`, "junction"));
+            withSwallowException(() => fs.symlinkSync(`${root}/recursivefsevents2`, `${root}/recursivefsevents/linkedsub2`, "junction"));
         });
         after(() => {
             cleanup();
@@ -393,6 +567,16 @@ describe("unittests:: sys:: symlinkWatching::", () => {
             isMacOs,
             isWindows,
         );
+
+        if (isMacOs || isWindows) {
+            verifyRecursiveWatchDirectoryUsingFsEvents(
+                ts.sys,
+                (dir, recursive, cb) => fs.watch(dir, { persistent: true, recursive }, cb),
+                `${root}/recursivefsevents`,
+                `${root}/recursivelinkedfsevents`,
+                isMacOs,
+            );
+        }
     });
 
     describe("with virtualFileSystem::", () => {
@@ -453,6 +637,22 @@ describe("unittests:: sys:: symlinkWatching::", () => {
         //     `${root}/linked`,
         //     /*isMacOs*/ false,
         //     /*isWindows*/ false,
+        // );
+
+        // verifyRecursiveWatchDirectoryUsingFsEvents(
+        //     getSys(),
+        //     (dir, recursive, cb, sys) => sys.fsWatchWorker(dir, recursive, cb),
+        //     `${root}/recursivefsevents`,
+        //     `${root}/recursivelinkedfsevents`,
+        //     /*isMacOs*/ false,
+        // );
+
+        // verifyRecursiveWatchDirectoryUsingFsEvents(
+        //     getSys(),
+        //     (dir, recursive, cb, sys) => sys.fsWatchWorker(dir, recursive, cb),
+        //     `${root}/recursivefsevents`,
+        //     `${root}/recursivelinkedfsevents`,
+        //     /*isMacOs*/ true,
         // );
     });
 });
